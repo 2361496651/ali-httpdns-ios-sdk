@@ -504,6 +504,11 @@ typedef NS_ENUM(NSInteger, HttpdnsHTTPChunkParseResult) {
         return;
     }
 
+    if (isComplete) {
+        // 远端已经发送完并关闭，需要提前标记，避免提前返回时漏记连接状态
+        exchange.remoteClosed = YES;
+    }
+
     if (!exchange.headerParsed) {
         NSUInteger headerEnd = NSNotFound;
         NSInteger statusCode = 0;
@@ -525,7 +530,6 @@ typedef NS_ENUM(NSInteger, HttpdnsHTTPChunkParseResult) {
         exchange.headerParsed = YES;
         exchange.headerEndIndex = headerEnd;
         exchange.statusCode = statusCode;
-        NSString *connectionValue = headers[@"connection"];
         NSString *contentLengthValue = headers[@"content-length"];
         if ([HttpdnsUtil isNotEmptyString:contentLengthValue]) {
             exchange.contentLength = [contentLengthValue longLongValue];
