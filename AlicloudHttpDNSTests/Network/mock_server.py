@@ -3,14 +3,19 @@
 HTTP/HTTPS Mock Server for HttpdnsNWHTTPClient Integration Tests
 
 模拟 httpbin.org 的核心功能，用于替代不稳定的外部依赖。
-支持 HTTP (端口80) 和 HTTPS (端口443，自签名证书)。
+支持 HTTP (端口 11080) 和多个 HTTPS 端口 (11443-11446，自签名证书)。
 
 使用方法:
-    sudo python3 mock_server.py
+    python3 mock_server.py
+
+端口配置:
+    - HTTP:  127.0.0.1:11080
+    - HTTPS: 127.0.0.1:11443, 11444, 11445, 11446
 
 注意:
-    - 需要 root 权限以绑定 80/443 端口
+    - 使用非特权端口，无需 root 权限
     - HTTPS 使用自签名证书，测试时需禁用 TLS 验证
+    - 多个 HTTPS 端口用于测试连接池隔离
     - 按 Ctrl+C 停止服务器
 """
 
@@ -272,16 +277,26 @@ def main():
 
     # 启动 HTTP 和 HTTPS 服务器（使用线程）
     http_thread = Thread(target=run_http_server, args=(11080,), daemon=True)
-    https_thread = Thread(target=run_https_server, args=(11443, cert_file), daemon=True)
+
+    # 启动多个 HTTPS 端口用于测试连接复用隔离
+    https_ports = [11443, 11444, 11445, 11446]
+    https_threads = []
 
     http_thread.start()
     time.sleep(0.5)  # 等待 HTTP 服务器启动
-    https_thread.start()
+
+    # 启动所有 HTTPS 服务器
+    for port in https_ports:
+        https_thread = Thread(target=run_https_server, args=(port, cert_file), daemon=True)
+        https_threads.append(https_thread)
+        https_thread.start()
+        time.sleep(0.1)  # 错峰启动避免端口冲突
 
     # 主线程等待（保持服务器运行）
     try:
         http_thread.join()
-        https_thread.join()
+        for thread in https_threads:
+            thread.join()
     except KeyboardInterrupt:
         signal_handler(signal.SIGINT, None)
 

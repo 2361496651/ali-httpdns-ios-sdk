@@ -21,12 +21,12 @@
 # 进入测试目录
 cd AlicloudHttpDNSTests/Network
 
-# 启动服务器（需要 sudo 权限以绑定 80/443 端口）
-sudo python3 mock_server.py
+# 启动服务器（无需 sudo 权限，使用非特权端口）
+python3 mock_server.py
 ```
 
 **注意**:
-- 需要 **root 权限**（端口 80/443 为特权端口）
+- **无需 root 权限**（使用非特权端口 11080/11443-11446）
 - 首次运行会自动生成自签名证书 (`server.pem`)
 - 按 `Ctrl+C` 停止服务器
 
@@ -60,15 +60,19 @@ Mock server 实现了以下 httpbin.org 兼容的 endpoints:
 
 | Endpoint | 功能 | 示例 |
 |----------|------|------|
-| `GET /get` | 返回请求信息（headers, args, origin） | `http://127.0.0.1/get` |
-| `GET /status/404` | 返回 404 错误 | `http://127.0.0.1/status/404` |
-| `GET /stream-bytes/{n}` | 返回 chunked 编码的 N 字节数据 | `http://127.0.0.1/stream-bytes/1024` |
-| `GET /delay/{seconds}` | 延迟指定秒数后返回 | `http://127.0.0.1/delay/5` |
-| `GET /headers` | 返回所有请求头部 | `http://127.0.0.1/headers` |
-| `GET /uuid` | 返回随机 UUID | `http://127.0.0.1/uuid` |
-| `GET /user-agent` | 返回 User-Agent 头部 | `http://127.0.0.1/user-agent` |
+| `GET /get` | 返回请求信息（headers, args, origin） | `http://127.0.0.1:11080/get` |
+| `GET /status/{code}` | 返回指定状态码（100-599） | `http://127.0.0.1:11080/status/404` |
+| `GET /stream-bytes/{n}` | 返回 chunked 编码的 N 字节数据 | `http://127.0.0.1:11080/stream-bytes/1024` |
+| `GET /delay/{seconds}` | 延迟指定秒数后返回（最多10秒） | `http://127.0.0.1:11080/delay/5` |
+| `GET /headers` | 返回所有请求头部 | `http://127.0.0.1:11080/headers` |
+| `GET /uuid` | 返回随机 UUID | `http://127.0.0.1:11080/uuid` |
+| `GET /user-agent` | 返回 User-Agent 头部 | `http://127.0.0.1:11080/user-agent` |
 
-所有 endpoints 支持 HTTP 和 HTTPS 两种协议。
+**端口配置**:
+- **HTTP**: `127.0.0.1:11080`
+- **HTTPS**: `127.0.0.1:11443`, `11444`, `11445`, `11446`（4个端口用于测试连接池隔离）
+
+所有 endpoints 在 HTTP 和 HTTPS 端口上均可访问。
 
 ---
 
@@ -76,8 +80,9 @@ Mock server 实现了以下 httpbin.org 兼容的 endpoints:
 
 ### 架构
 
-- **HTTP 服务器**: 监听 `127.0.0.1:80`
-- **HTTPS 服务器**: 监听 `127.0.0.1:443`（使用自签名证书）
+- **HTTP 服务器**: 监听 `127.0.0.1:11080`
+- **HTTPS 服务器**: 监听 `127.0.0.1:11443`, `11444`, `11445`, `11446`（4个端口，使用自签名证书）
+- **多端口目的**: 测试连接池的端口隔离机制，确保不同端口使用独立的连接池
 - **并发模型**: 多线程（`ThreadingMixIn`），支持高并发请求
 
 ### TLS 证书
