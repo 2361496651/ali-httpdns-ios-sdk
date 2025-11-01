@@ -5,8 +5,8 @@
 //  @author Created by Claude Code on 2025-11-01
 //  Copyright © 2025 alibaba-inc.com. All rights reserved.
 //
-//  边界条件与超时测试 - 包含边界条件 (M) 和超时交互 (P) 测试组
-//  测试总数：10 个（M:4 + P:6）
+//  边界条件与超时测试 - 包含边界条件 (M)、超时交互 (P) 和 Connection 头部 (R) 测试组
+//  测试总数：15 个（M:4 + P:6 + R:5）
 //
 
 #import "HttpdnsNWHTTPClientTestBase.h"
@@ -497,6 +497,244 @@
     // 验证复用发生
     XCTAssertEqual(self.client.connectionReuseCount, 1,
                    @"Second request to port 11444 should reuse connection");
+}
+
+#pragma mark - R. Connection 头部处理测试
+
+// R.1 Connection: close 导致连接被立即失效
+- (void)testConnectionHeader_Close_ConnectionInvalidated {
+    [self.client resetPoolStatistics];
+    NSString *poolKey = @"127.0.0.1:11080:tcp";
+
+    // 请求 1：服务器返回 Connection: close
+    NSError *error1 = nil;
+    HttpdnsNWHTTPClientResponse *response1 = [self.client performRequestWithURLString:@"http://127.0.0.1:11080/connection-test?mode=close"
+                                                                            userAgent:@"CloseTest"
+                                                                              timeout:15.0
+                                                                                error:&error1];
+    XCTAssertNotNil(response1, @"Request with Connection: close should succeed");
+    XCTAssertEqual(response1.statusCode, 200);
+
+    // 等待异步 returnConnection 完成
+    [NSThread sleepForTimeInterval:0.5];
+
+    // 验证：连接不在池中（已失效）
+    XCTAssertEqual([self.client connectionPoolCountForKey:poolKey], 0,
+                   @"Connection with 'Connection: close' header should be invalidated and not returned to pool");
+
+    // 请求 2：应该创建新连接（第一个连接已失效）
+    NSError *error2 = nil;
+    HttpdnsNWHTTPClientResponse *response2 = [self.client performRequestWithURLString:@"http://127.0.0.1:11080/connection-test?mode=keep-alive"
+                                                                            userAgent:@"KeepAliveTest"
+                                                                              timeout:15.0
+                                                                                error:&error2];
+    XCTAssertNotNil(response2);
+    XCTAssertEqual(response2.statusCode, 200);
+
+    // 验证统计：创建了 2 个连接（第一个被 close，第二个正常）
+    XCTAssertEqual(self.client.connectionCreationCount, 2,
+                   @"Should have created 2 connections (first closed by server)");
+    XCTAssertEqual(self.client.connectionReuseCount, 0,
+                   @"No reuse after Connection: close");
+}
+
+// R.2 Connection: keep-alive 允许连接复用
+- (void)testConnectionHeader_KeepAlive_ConnectionReused {
+    [self.client resetPoolStatistics];
+    NSString *poolKey = @"127.0.0.1:11080:tcp";
+
+    // 请求 1：服务器返回 Connection: keep-alive
+    NSError *error1 = nil;
+    HttpdnsNWHTTPClientResponse *response1 = [self.client performRequestWithURLString:@"http://127.0.0.1:11080/connection-test?mode=keep-alive"
+                                                                            userAgent:@"KeepAlive1"
+                                                                              timeout:15.0
+                                                                                error:&error1];
+    XCTAssertNotNil(response1);
+    XCTAssertEqual(response1.statusCode, 200);
+
+    // 等待连接归还
+    [NSThread sleepForTimeInterval:0.5];
+
+    // 验证：连接在池中
+    XCTAssertEqual([self.client connectionPoolCountForKey:poolKey], 1,
+                   @"Connection with 'Connection: keep-alive' should be returned to pool");
+
+    // 请求 2：应该复用第一个连接
+    NSError *error2 = nil;
+    HttpdnsNWHTTPClientResponse *response2 = [self.client performRequestWithURLString:@"http://127.0.0.1:11080/connection-test?mode=keep-alive"
+                                                                            userAgent:@"KeepAlive2"
+                                                                              timeout:15.0
+                                                                                error:&error2];
+    XCTAssertNotNil(response2);
+    XCTAssertEqual(response2.statusCode, 200);
+
+    // 验证统计：只创建了 1 个连接，第二个请求复用了它
+    XCTAssertEqual(self.client.connectionCreationCount, 1,
+                   @"Should have created only 1 connection");
+    XCTAssertEqual(self.client.connectionReuseCount, 1,
+                   @"Second request should reuse the first connection");
+}
+
+// R.3 Proxy-Connection: close 也会导致连接失效
+- (void)testConnectionHeader_ProxyClose_ConnectionInvalidated {
+    [self.client resetPoolStatistics];
+    NSString *poolKey = @"127.0.0.1:11080:tcp";
+
+    // 请求 1：服务器返回 Proxy-Connection: close (+ Connection: keep-alive)
+    NSError *error1 = nil;
+    HttpdnsNWHTTPClientResponse *response1 = [self.client performRequestWithURLString:@"http://127.0.0.1:11080/connection-test?mode=proxy-close"
+                                                                            userAgent:@"ProxyCloseTest"
+                                                                              timeout:15.0
+                                                                                error:&error1];
+    XCTAssertNotNil(response1, @"Request with Proxy-Connection: close should succeed");
+    XCTAssertEqual(response1.statusCode, 200);
+
+    // 等待异步 returnConnection 完成
+    [NSThread sleepForTimeInterval:0.5];
+
+    // 验证：连接不在池中（Proxy-Connection: close 应该失效连接）
+    XCTAssertEqual([self.client connectionPoolCountForKey:poolKey], 0,
+                   @"Connection with 'Proxy-Connection: close' header should be invalidated");
+
+    // 请求 2：应该创建新连接
+    NSError *error2 = nil;
+    HttpdnsNWHTTPClientResponse *response2 = [self.client performRequestWithURLString:@"http://127.0.0.1:11080/connection-test?mode=keep-alive"
+                                                                            userAgent:@"RecoveryTest"
+                                                                              timeout:15.0
+                                                                                error:&error2];
+    XCTAssertNotNil(response2);
+    XCTAssertEqual(response2.statusCode, 200);
+
+    // 验证统计：创建了 2 个连接
+    XCTAssertEqual(self.client.connectionCreationCount, 2,
+                   @"Should have created 2 connections (first closed by proxy header)");
+    XCTAssertEqual(self.client.connectionReuseCount, 0,
+                   @"No reuse after Proxy-Connection: close");
+}
+
+// R.4 Connection 头部大小写不敏感
+- (void)testConnectionHeader_CaseInsensitive_AllVariantsWork {
+    [self.client resetPoolStatistics];
+    NSString *poolKey = @"127.0.0.1:11080:tcp";
+
+    // 测试 1：CONNECTION: CLOSE (全大写)
+    NSError *error1 = nil;
+    HttpdnsNWHTTPClientResponse *response1 = [self.client performRequestWithURLString:@"http://127.0.0.1:11080/connection-test?mode=close-uppercase"
+                                                                            userAgent:@"UppercaseTest"
+                                                                              timeout:15.0
+                                                                                error:&error1];
+    XCTAssertNotNil(response1);
+    XCTAssertEqual(response1.statusCode, 200);
+
+    [NSThread sleepForTimeInterval:0.5];
+
+    // 验证：连接不在池中（大写 CLOSE 也应生效）
+    XCTAssertEqual([self.client connectionPoolCountForKey:poolKey], 0,
+                   @"'CONNECTION: CLOSE' (uppercase) should also close connection");
+
+    // 测试 2：Connection: Close (混合大小写)
+    NSError *error2 = nil;
+    HttpdnsNWHTTPClientResponse *response2 = [self.client performRequestWithURLString:@"http://127.0.0.1:11080/connection-test?mode=close-mixed"
+                                                                            userAgent:@"MixedCaseTest"
+                                                                              timeout:15.0
+                                                                                error:&error2];
+    XCTAssertNotNil(response2);
+    XCTAssertEqual(response2.statusCode, 200);
+
+    [NSThread sleepForTimeInterval:0.5];
+
+    // 验证：连接不在池中（混合大小写也应生效）
+    XCTAssertEqual([self.client connectionPoolCountForKey:poolKey], 0,
+                   @"'Connection: Close' (mixed case) should also close connection");
+
+    // 验证统计：创建了 2 个连接，都被 close
+    XCTAssertEqual(self.client.connectionCreationCount, 2,
+                   @"Should have created 2 connections (both closed due to case-insensitive matching)");
+    XCTAssertEqual(self.client.connectionReuseCount, 0,
+                   @"No reuse for any closed connections");
+}
+
+// R.5 并发场景：混合 close 和 keep-alive
+- (void)testConnectionHeader_ConcurrentMixed_CloseAndKeepAliveIsolated {
+    [self.client resetPoolStatistics];
+    NSString *poolKey = @"127.0.0.1:11080:tcp";
+
+    NSMutableArray<XCTestExpectation *> *expectations = [NSMutableArray array];
+    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+
+    NSLock *closeCountLock = [[NSLock alloc] init];
+    NSLock *keepAliveCountLock = [[NSLock alloc] init];
+    __block NSInteger closeCount = 0;
+    __block NSInteger keepAliveCount = 0;
+
+    // 发起 10 个请求：5 个 close，5 个 keep-alive
+    for (NSInteger i = 0; i < 10; i++) {
+        XCTestExpectation *expectation = [self expectationWithDescription:[NSString stringWithFormat:@"Request %ld", (long)i]];
+        [expectations addObject:expectation];
+
+        dispatch_async(queue, ^{
+            NSError *error = nil;
+            NSString *urlString;
+
+            if (i % 2 == 0) {
+                // 偶数：close
+                urlString = @"http://127.0.0.1:11080/connection-test?mode=close";
+            } else {
+                // 奇数：keep-alive
+                urlString = @"http://127.0.0.1:11080/connection-test?mode=keep-alive";
+            }
+
+            HttpdnsNWHTTPClientResponse *response = [self.client performRequestWithURLString:urlString
+                                                                                    userAgent:@"ConcurrentMixed"
+                                                                                      timeout:15.0
+                                                                                        error:&error];
+
+            if (response && response.statusCode == 200) {
+                if (i % 2 == 0) {
+                    [closeCountLock lock];
+                    closeCount++;
+                    [closeCountLock unlock];
+                } else {
+                    [keepAliveCountLock lock];
+                    keepAliveCount++;
+                    [keepAliveCountLock unlock];
+                }
+            }
+
+            [expectation fulfill];
+        });
+    }
+
+    [self waitForExpectations:expectations timeout:30.0];
+
+    // 验证结果
+    XCTAssertEqual(closeCount, 5, @"5 close requests should succeed");
+    XCTAssertEqual(keepAliveCount, 5, @"5 keep-alive requests should succeed");
+
+    // 等待所有连接归还
+    [NSThread sleepForTimeInterval:1.0];
+
+    // 验证池状态：
+    // - close 连接全部被失效（不在池中）
+    // - keep-alive 连接可能在池中（取决于并发时序和 remote close）
+    // - 关键是：总数不超过 4（池限制），无泄漏
+    NSInteger poolSize = [self.client connectionPoolCountForKey:poolKey];
+    XCTAssertLessThanOrEqual(poolSize, 4,
+                             @"Pool size should not exceed limit (no leak from close connections)");
+
+    // 验证统计：close 连接不应该被复用
+    // 创建数应该 >= 6 (至少 5 个 close + 1 个 keep-alive，因为 close 不能复用)
+    XCTAssertGreaterThanOrEqual(self.client.connectionCreationCount, 6,
+                                @"Should have created at least 6 connections (5 close + at least 1 keep-alive)");
+
+    // 后续请求验证池仍然健康
+    NSError *recoveryError = nil;
+    HttpdnsNWHTTPClientResponse *recoveryResponse = [self.client performRequestWithURLString:@"http://127.0.0.1:11080/get"
+                                                                                    userAgent:@"RecoveryTest"
+                                                                                      timeout:15.0
+                                                                                        error:&recoveryError];
+    XCTAssertNotNil(recoveryResponse, @"Pool should still be healthy after mixed close/keep-alive scenario");
+    XCTAssertEqual(recoveryResponse.statusCode, 200);
 }
 
 @end

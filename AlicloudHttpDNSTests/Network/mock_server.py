@@ -69,6 +69,8 @@ class MockHTTPHandler(BaseHTTPRequestHandler):
             self._handle_uuid()
         elif path == '/user-agent':
             self._handle_user_agent()
+        elif path == '/connection-test':
+            self._handle_connection_test()
         else:
             self._handle_not_found()
 
@@ -161,6 +163,42 @@ class MockHTTPHandler(BaseHTTPRequestHandler):
             'user-agent': self.headers.get('User-Agent', '')
         }
         self._send_json(200, data)
+
+    def _handle_connection_test(self):
+        """处理 /connection-test - 返回指定的 Connection 头部用于测试"""
+        from urllib.parse import parse_qs
+
+        # 解析查询参数
+        query_string = urlparse(self.path).query
+        params = parse_qs(query_string)
+        mode = params.get('mode', ['keep-alive'])[0]
+
+        data = {
+            'mode': mode,
+            'message': f'Connection header test with mode: {mode}'
+        }
+
+        body = json.dumps(data).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', len(body))
+
+        # 根据 mode 参数设置不同的 Connection 头部
+        if mode == 'close':
+            self.send_header('Connection', 'close')
+        elif mode == 'proxy-close':
+            self.send_header('Proxy-Connection', 'close')
+            self.send_header('Connection', 'keep-alive')
+        elif mode == 'close-uppercase':
+            self.send_header('CONNECTION', 'CLOSE')
+        elif mode == 'close-mixed':
+            self.send_header('Connection', 'Close')
+        else:  # keep-alive (default)
+            self.send_header('Connection', 'keep-alive')
+
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
 
     def _handle_not_found(self):
         """处理未知路径"""
@@ -272,6 +310,10 @@ def main():
     print("  GET /headers          - 返回所有请求头部")
     print("  GET /uuid             - 返回随机 UUID")
     print("  GET /user-agent       - 返回 User-Agent 头部")
+    print("  GET /connection-test?mode={mode}")
+    print("                        - 返回指定 Connection 头部")
+    print("                          mode: close, keep-alive, proxy-close,")
+    print("                                close-uppercase, close-mixed")
     print("\n按 Ctrl+C 停止服务器\n")
     print("="*60 + "\n")
 
