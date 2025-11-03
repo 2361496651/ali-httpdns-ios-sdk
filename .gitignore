@@ -55,3 +55,4 @@ Scripts/ocunit2junit
 .idea/
 .cursor/
 .claude/
+.AGENTS.md

@@ -42,20 +42,30 @@ This is an iOS HTTPDNS SDK with a multi-layered architecture designed for secure
 - Handles TTL validation and expired IP reuse policy
 - Coordinates retry logic and degradation to local DNS
 
-**3. DNS Resolution Layer**
+**3. Network Transport Layer (`HttpdnsNWHTTPClient`)**
+- Low-level HTTP/HTTPS transport using Apple's Network framework
+- Singleton with persistent connection pooling (max 4 idle connections per host:port:scheme)
+- Manages reusable connections (`HttpdnsNWReusableConnection`) with automatic idle timeout (30s)
+- Thread-safe concurrent request handling via serial pool queue
+- Custom HTTP header parser supporting chunked transfer encoding
+- TLS certificate validation with configurable trust evaluation
+- Exposed by `HttpdnsRemoteResolver` for DNS resolution requests
+
+**4. DNS Resolution Layer**
 - **`HttpdnsRemoteResolver`**: HTTPS/HTTP requests to Alicloud servers
   - Builds authenticated requests with HMAC-SHA256 signatures
   - Optional AES-CBC encryption for sensitive parameters
   - Parses JSON responses into `HttpdnsHostObject` (IPv4/IPv6)
+  - Uses `HttpdnsNWHTTPClient` for actual HTTP transport
 - **`HttpdnsLocalResolver`**: Fallback to system DNS when remote fails
 
-**4. Scheduling & Service Discovery (`HttpdnsScheduleCenter`)**
+**5. Scheduling & Service Discovery (`HttpdnsScheduleCenter`)**
 - Maintains regional service endpoint pools (CN, HK, SG, US, DE)
 - Rotates between endpoints on failure for load balancing
 - Separates IPv4 and IPv6 endpoint lists
 - Per-account endpoint isolation
 
-**5. Data Flow (Synchronous Resolution)**
+**6. Data Flow (Synchronous Resolution)**
 ```
 User Request
   → Validate & wrap in HttpdnsRequest
@@ -95,6 +105,8 @@ On Failure:
 - **`HttpdnsHostObject`**: Internal model with separate IPv4/IPv6 arrays, TTLs, timestamps
 - **`HttpdnsResult`**: Public-facing result model (simplified view)
 - **`HttpdnsHostRecord`**: Serializable model for SQLite persistence
+- **`HttpdnsNWHTTPClient`**: Singleton HTTP transport layer with connection pooling
+- **`HttpdnsNWReusableConnection`**: Wrapper for Network framework connections with idle timeout tracking
 - **`HttpdnsIpStackDetector`**: Detects network stack type (IPv4/IPv6 capability)
 - **`HttpdnsReachability`**: Monitors network changes, triggers pre-resolution
 - **`HttpdnsUtil`**: Crypto utilities (HMAC, AES), IP validation, encoding
@@ -102,9 +114,10 @@ On Failure:
 ### Concurrency Model
 
 - Concurrent queues for async user requests and DNS resolution
-- Serial queue for network stream operations
+- Serial pool queue in `HttpdnsNWHTTPClient` for connection pool management
 - `dispatch_semaphore_t` for blocking synchronous calls
 - `HttpDnsLocker` prevents duplicate concurrent resolution of same domain
+- Network framework handles underlying I/O asynchronously
 
 ## Coding Conventions
 
@@ -134,6 +147,12 @@ On Failure:
   - Test domains: `*.onlyforhttpdnstest.run.place` (renewed annually)
 - Never commit real production Account IDs or Secret Keys
 - Test file naming mirrors class under test (e.g., `AlicloudHttpDNSClientTests.m`)
+- Network layer integration tests organized into 5 focused modules:
+  - `HttpdnsNWHTTPClient_BasicIntegrationTests.m`: Basic HTTP/HTTPS requests
+  - `HttpdnsNWHTTPClient_ConcurrencyTests.m`: Thread safety and concurrent access
+  - `HttpdnsNWHTTPClient_PoolManagementTests.m`: Connection pooling and reuse
+  - `HttpdnsNWHTTPClient_EdgeCasesAndTimeoutTests.m`: Timeout and error handling
+  - `HttpdnsNWHTTPClient_StateMachineTests.m`: Connection lifecycle state transitions
 
 ## SDK-Specific Notes
 
@@ -147,9 +166,10 @@ On Failure:
 - Umbrella header: `AlicloudHttpDNS.h` imports all public APIs
 
 **Required System Frameworks:**
-- `CoreTelephony`, `SystemConfiguration`
+- `CoreTelephony`, `SystemConfiguration`, `Network` (for HTTP transport)
 - Libraries: `sqlite3.0`, `resolv`, `z`
 - Linker flags: `-ObjC -lz`
+- Minimum deployment target: iOS 12.0+ (required for Network framework)
 
 **Pre-Resolution Strategy:**
 - Call `setPreResolveHosts:byIPType:` at app startup for hot domains
