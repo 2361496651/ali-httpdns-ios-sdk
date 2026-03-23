@@ -21,7 +21,7 @@ Pod::Spec.new do |s|
   s.source_files = "AlicloudHttpDNS/**/*.{h,m}"
 
   # 资源：隐私清单
-  s.resources    = "resource/PrivacyInfo.xcprivacy"
+  #s.resources    = "resource/PrivacyInfo.xcprivacy"
 
   # 公开头文件（由 umbrella 头导入的稳定接口）
   s.public_header_files = [
